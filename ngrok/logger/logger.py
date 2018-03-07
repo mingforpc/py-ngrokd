@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
+import os
 import logging.config
 
-from src.ngrok import CONFIG_FILE_PATH
+CONFIG_FILE_PATH = os.path.split(os.path.realpath(__file__))[0] + "/../"
 
 logging.config.fileConfig(CONFIG_FILE_PATH + 'logger.config')
 
