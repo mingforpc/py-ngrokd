@@ -2,6 +2,7 @@
 # -*- coding: UTF-8 -*-
 import ssl
 import abc
+import json
 import socket
 import asyncio
 from ngrok.logger import logger
@@ -112,28 +113,6 @@ class BaseService(abc.ABC):
         handler = self.handler_cls(conn, self.event_loop)
         self.event_loop.add_reader(handler.fd, handler.read_handler)
 
-    def _on_read(self, conn):
-        """
-
-        :param conn:
-        :return:
-        """
-        try:
-            data = conn.recv(8)
-            content_len = tolen(data[0:8])
-            data = conn.recv(content_len)
-            buf = data.decode('utf-8')
-
-            print(content_len)
-            print(len(buf))
-            print(buf)
-
-            if data == '':
-                self.event_loop.remove_reader(conn.fileno())
-                conn.close()
-        except ssl.SSLWantReadError as ex:
-            pass
-
 
 class NgrokHandler:
 
@@ -142,6 +121,7 @@ class NgrokHandler:
         self.conn = conn
         self.loop = loop
         self.fd = conn.fileno()
+
         self.binary_data = None
 
     def read_handler(self):
@@ -150,7 +130,7 @@ class NgrokHandler:
         :return:
         """
         try:
-            data = self.conn.recv(120)
+            data = self.conn.recv(DEFAULT_BUF_SIZE)
         except ssl.SSLWantReadError:
             return
 
@@ -162,7 +142,6 @@ class NgrokHandler:
 
             if request_size > len(data[8:]):
                 # 请求没接收全，继续接受
-                logger.debug(data[8:])
 
                 self.binary_data = bytearray(data)
 
@@ -170,10 +149,24 @@ class NgrokHandler:
                 self.loop.remove_reader(self.fd)
                 # 因为请求未接受完, 使用继续接收的read回调
                 self.loop.add_reader(self.fd, self.continue_read_handler)
-            else:
+            elif request_size == len(data[8:]):
                 # 请求接受全
-                logger.debug(data[8:])
-                pass
+
+                request_data = data[8:]
+                logger.debug("receive control request: %s", request_data)
+
+                # TODO: 在这里要做处理请求
+                self.process_request(request_data)
+
+                self.loop.remove_reader(self.fd)
+            else:
+
+                request_data = data[8:request_size + 8]
+                # TODO: 在这里要做处理请求
+                self.process_request(request_data)
+
+                # 有TCP粘包
+                self.binary_data = bytearray(data[request_size + 8:])
 
     def continue_read_handler(self):
         """
@@ -181,7 +174,7 @@ class NgrokHandler:
         :return:
         """
         try:
-            data = self.conn.recv(120)
+            data = self.conn.recv(DEFAULT_BUF_SIZE)
 
         except ssl.SSLWantReadError as ex:
             logger.debug("SSLWantReadError")
@@ -191,41 +184,70 @@ class NgrokHandler:
             self.loop.remove_reader(self.conn.fileno())
             self.conn.close()
         else:
-            logger.debug(111)
             request_size = tolen(self.binary_data[:8])
             print('request_size:' + str(request_size))
             try:
-                self.binary_data = bytearray(bytes(self.binary_data) + data)
+                self.binary_data.extend(data)
             except Exception as ex:
                 logger.exception("test:", exc_info=ex)
             if request_size > len(self.binary_data[8:]):
                 # 请求没接收全，继续接受
-                print(self.binary_data[8:])
-                # self.loop.add_reader(self.fd, self.continue_read_handler)
+                pass
             elif request_size < len(self.binary_data[8:]):
                 # 请求的大小，小于收到的大小，有TCP粘包
 
                 # 获取本次请求
                 request_data = self.binary_data[8: 8 + request_size]
-                print(request_data)
+
+                logger.debug("receive control request: %s", request_data)
                 # TODO: 在这里要做处理请求
+                self.process_request(request_data)
 
                 # 移除已处理请求的数据
                 self.binary_data = self.binary_data[8 + request_size:]
 
+                # 移除继续读的read回调
+                self.loop.remove_reader(self.fd)
             else:
                 # 请求接受全
                 request_data = self.binary_data[8:]
-                print(request_data)
+                logger.debug("receive control request: %s", request_data)
+
                 # TODO: 在这里要做处理请求
+                self.process_request(request_data)
 
                 self.binary_data = None
 
                 # 移除继续读的read回调
                 self.loop.remove_reader(self.fd)
-                # 因为已经处理完大请求，改用回普通read回调
-                self.loop.add_reader(self.fd, self.read_handler)
 
+    def process_request(self, request_data):
+        """
+        处理读取到的请求命令
+        :param request_data: 读取到的请求数据，会在本函数中转为json格式
+        :return:
+        """
+        try:
+            request = json.loads(request_data)
+        except Exception as ex:
+            logger.exception("Exception in process_request, load request:", exc_info=ex)
+            self.process_error()
+            return
+
+
+
+
+    def process_error(self):
+        """
+        处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
+        :return:
+        """
+        self.loop.remove_reader(self.fd)
+        self.loop.remove_writer(self.fd)
+        try:
+            self.conn.close()
+        except Exception as ex:
+            logger.exception("Exception in process error:", exc_info=ex)
 
 
 
