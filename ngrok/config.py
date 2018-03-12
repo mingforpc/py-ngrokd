@@ -14,3 +14,6 @@ DEFAULT_PEM_FILE = 'snakeoil.crt'
 DEFAULT_KEY_FILE = 'snakeoil.key'
 
 DEFAULT_BUF_SIZE = 1024*8
+
+VERSION = "1"
+MM_VERSION = "0.0"

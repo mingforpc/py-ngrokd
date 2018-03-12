@@ -5,9 +5,13 @@ import abc
 import json
 import socket
 import asyncio
+from ngrok.err import ERR_SUCCESS, ERR_UNKNOWN_REQUEST, ERR_UNREGISTERED_CLIENT_ID, ERR_UNSUPPORTED_PROTOCOL, \
+    ERR_URL_EXISTED, get_err_msg
 from ngrok.logger import logger
-from ngrok.util import tolen
+from ngrok.global_cache import GLOBAL_CACHE
+from ngrok.util import tolen, generate_auth_resp, generate_new_tunnel
 from ngrok.config import CONFIG_FILE_PATH, DEFAULT_PEM_FILE, DEFAULT_KEY_FILE, DEFAULT_BUF_SIZE
+from ngrok.controler.ngrok_controller import NgrokController
 
 DEFAULT_SERVER_DOMAIN = 'localhost.com'
 DEFAULT_SERVER_HOST = '127.0.0.1'
@@ -18,10 +22,10 @@ DEFAULT_SERVER_PORT = 14443
 
 class BaseService(abc.ABC):
 
-    def __init__(self, event_loop, handler_cls, host=None, port=None, is_ssl=False, hostname=None, cert_file=None, key_file=None, listen=100):
+    def __init__(self, loop, handler_cls, host=None, port=None, is_ssl=False, hostname=None, cert_file=None, key_file=None, listen=100):
         self.host = host
         self.port = port
-        self.event_loop = event_loop
+        self.loop = loop
         self.handler_cls = handler_cls
         self.is_ssl = is_ssl
         self.hostname = hostname
@@ -71,7 +75,7 @@ class BaseService(abc.ABC):
             await self.handle_connect()
 
     async def handle_connect(self):
-        conn, address = await self.event_loop.sock_accept(self.__socket)
+        conn, address = await self.loop.sock_accept(self.__socket)
         conn.setblocking(0)
         if self.is_ssl:
             conn = self.context.wrap_socket(conn, server_side=True, do_handshake_on_connect=False,
@@ -79,7 +83,8 @@ class BaseService(abc.ABC):
             logger.debug("start ssl handshake")
             self._on_handshake(conn)
         else:
-            self.event_loop.add_reader(conn.fileno(), self._on_read, conn)
+            handler = self.handler_cls(conn, self.loop)
+            self.loop.add_reader(handler.fd, handler.read_handler)
 
     def _on_handshake(self, conn):
         """
@@ -90,28 +95,28 @@ class BaseService(abc.ABC):
         try:
             conn.do_handshake()
         except ssl.SSLWantReadError:
-            self.event_loop.add_reader(conn.fileno(), self._on_handshake, conn)
+            self.loop.add_reader(conn.fileno(), self._on_handshake, conn)
             return
         except ssl.SSLWantWriteError:
-            self.event_loop.add_writer(conn.fileno(), self._on_handshake, conn)
+            self.loop.add_writer(conn.fileno(), self._on_handshake, conn)
             return
         except BaseException as exc:
 
             logger.warning("%r: SSL handshake failed", self, exc_info=True)
-            self.event_loop.remove_reader(conn.fileno())
-            self.event_loop.remove_writer(conn.fileno())
+            self.loop.remove_reader(conn.fileno())
+            self.loop.remove_writer(conn.fileno())
             conn.close()
             if isinstance(exc, Exception):
                 return
             else:
                 raise
 
-        self.event_loop.remove_reader(conn.fileno())
-        self.event_loop.remove_writer(conn.fileno())
+        self.loop.remove_reader(conn.fileno())
+        self.loop.remove_writer(conn.fileno())
         logger.debug("ssl handshake finish")
 
-        handler = self.handler_cls(conn, self.event_loop)
-        self.event_loop.add_reader(handler.fd, handler.read_handler)
+        handler = self.handler_cls(conn, self.loop)
+        self.loop.add_reader(handler.fd, handler.read_handler)
 
 
 class NgrokHandler:
@@ -123,6 +128,9 @@ class NgrokHandler:
         self.fd = conn.fileno()
 
         self.binary_data = None
+
+        self.resp_list = []
+        self.writing_resp = None
 
     def read_handler(self):
         """
@@ -221,6 +229,34 @@ class NgrokHandler:
                 # 移除继续读的read回调
                 self.loop.remove_reader(self.fd)
 
+    def write_handler(self):
+        """
+        处理写回调。
+        :return:
+        """
+
+        if len(self.resp_list) == 0 and self.writing_resp is None:
+            self.loop.remove_writer(self.fd)
+            self.process_error()
+            return
+
+        try:
+
+            if self.writing_resp is None:
+                self.writing_resp = self.resp_list.pop()
+
+            sent_bytes = self.conn.send(self.writing_resp)
+            if sent_bytes < len(self.writing_resp):
+                self.writing_resp = self.writing_resp[sent_bytes:]
+            else:
+                self.writing_resp = None
+                self.loop.remove_writer(self.fd)
+                self.loop.add_reader(self.fd, self.read_handler)
+
+        except ssl.SSLWantReadError as ex:
+            logger.debug("SSLWantReadError")
+            return
+
     def process_request(self, request_data):
         """
         处理读取到的请求命令
@@ -228,14 +264,104 @@ class NgrokHandler:
         :return:
         """
         try:
-            request = json.loads(request_data)
+            request = json.loads(str(request_data, 'utf-8'))
         except Exception as ex:
             logger.exception("Exception in process_request, load request:", exc_info=ex)
             self.process_error()
             return
 
+        req_type = request.get('Type', None)
+
+        if req_type == 'Auth':
+            err, msg, resp = self.auth_process(request)
+        elif req_type == 'ReqTunnel':
+            pass
+            # err, msg, resp = self.req_tunnel_process(req_json, fd)
+        elif req_type == 'RegProxy':
+            pass
+            # err, msg, resp = self.reg_proxy_process(req_json, fd)
+        elif req_type == 'Ping':
+            pass
+            # err, msg, resp = self.ping_process(req_json, fd)
+        else:
+            # unknown req type, close this connection
+            # self.process_error()
+            err, msg, data = ERR_UNKNOWN_REQUEST, get_err_msg(ERR_UNKNOWN_REQUEST), None
+
+        if err == ERR_UNKNOWN_REQUEST:
+            self.process_error()
+        elif err == ERR_SUCCESS:
+            self.resp_list.append(resp)
+            self.loop.remove_reader(self.fd)
+            self.loop.remove_reader(self.fd)
+            self.loop.add_writer(self.fd, self.write_handler)
+
+    def auth_process(self, request):
+        """
+        process auth
+        :param request:
+        :return: (err_code, msg, binary response data)
+        """
+        user = request['Payload'].get('User')
+        pwd = request['Payload'].get('Password')
+        version = request['Payload'].get('Version')
+        mm_version = request['Payload'].get('MmVersion')
+        os_type = request['Payload'].get('OS')
+        arch = request['Payload'].get('Arch')
+
+        err, msg, client_id = NgrokController.auth(user, pwd, version, mm_version, os_type, arch)
+        logger.debug('auth process: err[%d], msg[%s], client_id[%s]', err, msg, client_id)
+
+        if err != ERR_SUCCESS:
+            resp = generate_auth_resp(error=msg)
+        else:
+            GLOBAL_CACHE.add_client_id(client_id)
+            GLOBAL_CACHE.add_control_socket(self.fd, client_id)
+            resp = generate_auth_resp(client_id=client_id)
+
+        return err, msg, resp
+
+    def req_tunnel_process(self, request):
+        """
+        Process ReqTunnel request
+        :param request:
+        :return: (err_code, msg, binary response data)
+        """
+
+        if self.fd not in GLOBAL_CACHE.CONTROL_SOCKET:
+            err = ERR_UNREGISTERED_CLIENT_ID
+            msg = get_err_msg(ERR_UNREGISTERED_CLIENT_ID)
+            return err, msg, generate_new_tunnel(msg)
+
+        req_id = request['Payload'].get('ReqId')
+        protocol = request['Payload'].get('Protocol')
+
+        if protocol in ('http', 'https'):
+            hostname = request['Payload'].get('Hostname')
+            subdomain = request['Payload'].get('Subdomain')
+            http_auth = request['Payload'].get('HttpAuth')
+
+            err, msg, url = NgrokController.req_tunnel_http(req_id, protocol, hostname, subdomain, http_auth)
+
+            if err != ERR_SUCCESS:
+                return err, msg, generate_new_tunnel(msg)
+
+            if url in GLOBAL_CACHE.HOSTS:
+                err = ERR_URL_EXISTED
+                msg = get_err_msg(ERR_URL_EXISTED)
+                return err, msg, generate_new_tunnel(msg)
+
+            GLOBAL_CACHE.add_host(url, self.fd)
 
 
+        elif protocol == 'tcp':
+            # TODO: Fixed me ! TCP not support!!
+            remote_port = request['Payload'].get('RemotePort')
+
+            err = ERR_UNSUPPORTED_PROTOCOL
+            msg = get_err_msg(ERR_UNSUPPORTED_PROTOCOL)
+
+            return err, msg, generate_new_tunnel(msg)
 
     def process_error(self):
         """
@@ -244,14 +370,20 @@ class NgrokHandler:
         """
         self.loop.remove_reader(self.fd)
         self.loop.remove_writer(self.fd)
+
+        client_id = GLOBAL_CACHE.pop_control_socket(self.fd)
+
+        proxy_socket_list = GLOBAL_CACHE.pop_client_id(client_id)
+        # TODO: Fixed me, may be should close all the proxy socket here
+
+        # TODO: url
+        # GLOBAL_CACHE.pop_host()
+
+
         try:
             self.conn.close()
         except Exception as ex:
             logger.exception("Exception in process error:", exc_info=ex)
-
-
-
-
 
 
 event_loop = asyncio.get_event_loop()
