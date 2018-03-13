@@ -48,6 +48,15 @@ def generate_new_tunnel(req_id='', url='', protocol='', error=''):
     return conform_resp(buffer)
 
 
+def generate_pong():
+    payload = dict()
+    body = dict()
+    body['Type'] = 'Pong'
+    body['Payload'] = payload
+    buffer = json.dumps(body)
+    return conform_resp(buffer)
+
+
 def md5(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest().lower()
 
