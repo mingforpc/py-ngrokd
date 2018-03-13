@@ -64,3 +64,13 @@ def md5(content):
 def get_rand_char(length):
     _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyz"
     return ''.join(random.sample(_chars, length))
+
+
+def get_http_headers(request):
+    header, data = request.split('\r\n\r\n', 1)
+    headers = dict()
+    for line in header.split('\r\n')[1:]:
+        key, val = line.split(': ', 1)
+        headers[key.upper()] = val
+
+    return headers

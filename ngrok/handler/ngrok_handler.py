@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
 import ssl
 import json
 from ngrok.err import ERR_SUCCESS, ERR_UNKNOWN_REQUEST, ERR_UNSUPPORTED_PROTOCOL, ERR_URL_EXISTED, ERR_CLOSE_SOCKET, \
@@ -35,8 +37,9 @@ class NgrokHandler:
             return
 
         if not data:
-            self.loop.remove_reader(self.conn.fileno())
-            self.conn.close()
+            self.process_error()
+            # self.loop.remove_reader(self.conn.fileno())
+            # self.conn.close()
         else:
             request_size = tolen(data[:8])
 
