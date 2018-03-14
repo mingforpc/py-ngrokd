@@ -3,8 +3,8 @@ from ngrok.config import DEFAULT_SERVER_DOMAIN, DEFAULT_SERVER_HTTP
 from ngrok.util import md5, get_rand_char
 from ngrok.logger import logger
 from ngrok.err import get_err_msg
-from ngrok.err import ERR_SUCCESS, ERR_FAILED
-
+from ngrok.err import ERR_SUCCESS, ERR_FAILED, ERR_CLIENT_ID_NOT_EXIST
+from ngrok.global_cache import GLOBAL_CACHE
 
 class NgrokController:
     @classmethod
@@ -67,6 +67,23 @@ class NgrokController:
         except Exception as ex:
             logger.exception("exception in process req_tunnel_http:", exc_info=ex)
             return ERR_FAILED, get_err_msg(ERR_FAILED), None
+
+    @staticmethod
+    def reg_proxy(client_id):
+        """
+        判断这个client_id是否已经登录的client_id
+        :param client_id:
+        :return:
+        """
+        try:
+            if client_id not in GLOBAL_CACHE.TUNNEL_LIST:
+                return ERR_CLIENT_ID_NOT_EXIST, get_err_msg(ERR_CLIENT_ID_NOT_EXIST), None
+            else:
+                return ERR_SUCCESS, get_err_msg(ERR_SUCCESS), None
+        except Exception as ex:
+            logger.exception("exception in process reg_proxy:", exc_info=ex)
+            return ERR_FAILED, get_err_msg(ERR_FAILED), None
+
 
     # @staticmethod
     # def reg_proxy(client_id):

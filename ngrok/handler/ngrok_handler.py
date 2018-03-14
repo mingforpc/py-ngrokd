@@ -6,7 +6,8 @@ from ngrok.err import ERR_SUCCESS, ERR_UNKNOWN_REQUEST, ERR_UNSUPPORTED_PROTOCOL
     get_err_msg
 from ngrok.logger import logger
 from ngrok.global_cache import GLOBAL_CACHE
-from ngrok.util import tolen, generate_auth_resp, generate_new_tunnel, generate_pong, generate_req_proxy
+from ngrok.util import tolen, generate_auth_resp, generate_new_tunnel, generate_pong, generate_req_proxy, \
+    generate_start_proxy
 from ngrok.config import DEFAULT_BUF_SIZE
 from ngrok.controler.ngrok_controller import NgrokController
 
@@ -19,12 +20,27 @@ class NgrokHandler:
         self.loop = loop
         self.fd = conn.fileno()
 
+        # 从conn中接收到的二进制数据
         self.binary_data = None
 
+        # 准备返回给客户端的响应队列
         self.resp_list = []
+        # 正在返回给客户端的响应
         self.writing_resp = None
 
         self.client_id = None
+
+        # 表示是否是proxy连接
+        self.is_proxy = False
+        # 浏览器客户端的网络地址
+        self.browser_addr = None
+        # 代理的url
+        self.url = None
+
+        # 一个方法对象
+        # 仅用于Proxy连接
+        # 用来将读取回来的数据插入到 http handler 的 resp_list 中
+        self.insert_http_resp_list = None
 
     def read_handler(self):
         """
@@ -38,38 +54,41 @@ class NgrokHandler:
 
         if not data:
             self.process_error()
-            # self.loop.remove_reader(self.conn.fileno())
-            # self.conn.close()
         else:
-            request_size = tolen(data[:8])
 
-            if request_size > len(data[8:]):
-                # 请求没接收全，继续接受
-
-                self.binary_data = bytearray(data)
-
-                # 移除旧的read回调
-                self.loop.remove_reader(self.fd)
-                # 因为请求未接受完, 使用继续接收的read回调
-                self.loop.add_reader(self.fd, self.continue_read_handler)
-            elif request_size == len(data[8:]):
-                # 请求接受全
-
-                request_data = data[8:]
-                logger.debug("receive control request: %s", request_data)
-
-                # TODO: 在这里要做处理请求
-                self.process_request(request_data)
-
-                self.loop.remove_reader(self.fd)
+            if self.is_proxy is True:
+                self.insert_http_resp_list(data)
             else:
 
-                request_data = data[8:request_size + 8]
-                # TODO: 在这里要做处理请求
-                self.process_request(request_data)
+                request_size = tolen(data[:8])
 
-                # 有TCP粘包
-                self.binary_data = bytearray(data[request_size + 8:])
+                if request_size > len(data[8:]):
+                    # 请求没接收全，继续接受
+
+                    self.binary_data = bytearray(data)
+
+                    # 移除旧的read回调
+                    self.loop.remove_reader(self.fd)
+                    # 因为请求未接受完, 使用继续接收的read回调
+                    self.loop.add_reader(self.fd, self.continue_read_handler)
+                elif request_size == len(data[8:]):
+                    # 请求接受全
+
+                    request_data = data[8:]
+                    logger.debug("receive control request: %s", request_data)
+
+                    # TODO: 在这里要做处理请求
+                    self.process_request(request_data)
+
+                    self.loop.remove_reader(self.fd)
+                else:
+
+                    request_data = data[8:request_size + 8]
+                    # TODO: 在这里要做处理请求
+                    self.process_request(request_data)
+
+                    # 有TCP粘包
+                    self.binary_data = bytearray(data[request_size + 8:])
 
     def continue_read_handler(self):
         """
@@ -172,13 +191,12 @@ class NgrokHandler:
         elif req_type == 'ReqTunnel':
             err, msg, resp = self.req_tunnel_process(request)
         elif req_type == 'RegProxy':
-            pass
-            # err, msg, resp = self.reg_proxy_process(req_json, fd)
+            err, msg, resp = self.reg_proxy_process(request)
         elif req_type == 'Ping':
             err, msg, resp = self.ping_process()
         else:
             # unknown req type, close this connection
-            err, msg, data = ERR_UNKNOWN_REQUEST, get_err_msg(ERR_UNKNOWN_REQUEST), None
+            err, msg, resp = ERR_UNKNOWN_REQUEST, get_err_msg(ERR_UNKNOWN_REQUEST), None
 
         if err in (ERR_UNKNOWN_REQUEST, ERR_CLOSE_SOCKET):
             self.process_error()
@@ -244,7 +262,7 @@ class NgrokHandler:
                 msg = get_err_msg(ERR_URL_EXISTED)
                 return err, msg, generate_new_tunnel(msg)
 
-            GLOBAL_CACHE.add_host(url, self.fd, self.prepare_send_req_proxy)
+            GLOBAL_CACHE.add_host(url, self.fd, self.client_id, self.prepare_send_req_proxy)
             GLOBAL_CACHE.add_tunnel(self.client_id, protocol, url)
 
             return err, msg, generate_new_tunnel(req_id=req_id, url=url, protocol=protocol)
@@ -256,6 +274,50 @@ class NgrokHandler:
             msg = get_err_msg(ERR_UNSUPPORTED_PROTOCOL)
 
             return err, msg, generate_new_tunnel(msg)
+
+    def reg_proxy_process(self, request):
+        """
+        处理reg_proxy请求。一定不能在控制连接（指的是接收其他请求的连接）中接收到此请求。
+        收到reg_proxy，表示此连接是用来做代理的连接。
+        一般流程是，服务器发送req_proxy请求到客户端，客户端收到后，另起一个连接，并发送reg_proxy,
+        请求中的ClientId表示，该代理连接属于哪个客户端。
+        :param request:
+        :return:
+        """
+        err = ERR_CLOSE_SOCKET
+        msg = get_err_msg(ERR_CLOSE_SOCKET)
+        if self.client_id is not None:
+            # 该连接已经存在client_id，可能是不规范或者恶意的客户端，关闭连接
+            return err, msg, None
+
+        client_id = request['Payload'].get('ClientId')
+
+        # 请求中client_id为None，可能是不规范或者恶意的客户端，关闭连接
+        if client_id is None:
+            return err, msg, None
+
+        err, msg, resp = NgrokController.reg_proxy(client_id)
+
+        if err == ERR_SUCCESS:
+            self.is_proxy = True
+            self.client_id = client_id
+            func_dict = GLOBAL_CACHE.HTTP_REQUEST_LIST[client_id].pop()
+
+            self.insert_http_resp_list = func_dict['insert_http_resp_list']
+
+            set_insert_proxy_resp_list = func_dict['set_insert_proxy_resp_list']
+
+            def insert_proxy_resp_list(resp_data):
+                self.resp_list.append(resp_data)
+
+            set_insert_proxy_resp_list(insert_proxy_resp_list)
+
+            get_url_and_addr = func_dict['get_url_and_addr']
+
+            self.url, self.browser_addr = get_url_and_addr()
+            resp = generate_start_proxy(self.url, self.browser_addr)
+
+        return err, msg, resp
 
     def ping_process(self):
         """

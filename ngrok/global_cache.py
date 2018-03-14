@@ -9,14 +9,18 @@ class GlobalCache(object):
 
     def __init__(self):
 
-        # key: url, value: {"fd": fd, "send_req_proxy": coroutine function, }
+        # key: url, value: {"fd": fd, 'client_id': client_id, "send_req_proxy": coroutine function, }
         self.HOSTS = dict()
 
         # key: client_id, value: {'http': [url, url,...], 'https': [url, url, ..], 'tcp': [port, port, ..]}
         self.TUNNEL_LIST = dict()
 
-        # key: client id, value: list of ProxySocket object
-        self.PROXY_SOCKET_LIST = dict()
+        # key: client id, value: [
+        #                         {'get_url_and_addr': function,
+        #                          'insert_http_resp_list': function,
+        #                          'set_insert_proxy_resp_list': function},
+        #                        ...]
+        self.HTTP_REQUEST_LIST = dict()
 
         # key: fd, value: client id
         # self.CONTROL_SOCKET = dict()
@@ -26,7 +30,7 @@ class GlobalCache(object):
         add new client id
         :return:
         """
-        self.PROXY_SOCKET_LIST[client_id] = []
+        self.HTTP_REQUEST_LIST[client_id] = []
 
     def pop_client_id(self, client_id):
         """
@@ -34,7 +38,7 @@ class GlobalCache(object):
         :param client_id:
         :return:
         """
-        return self.PROXY_SOCKET_LIST.pop(client_id)
+        return self.HTTP_REQUEST_LIST.pop(client_id)
 
     # def add_control_socket(self, fd, client_id):
     #     """
@@ -53,22 +57,23 @@ class GlobalCache(object):
     #     """
     #     return self.CONTROL_SOCKET.pop(fd)
 
-    def add_host(self, url, fd, send_req_proxy):
+    def add_host(self, url, fd, client_id, send_req_proxy):
         """
         Add url info to HOSTS
         :param url:
         :param fd:
+        :param client_id:
         :param send_req_proxy: coroutine function
         :return:
         """
-        host_info = {'fd': fd, 'send_req_proxy': send_req_proxy}
+        host_info = {'fd': fd, 'client_id': client_id, 'send_req_proxy': send_req_proxy}
         self.HOSTS[url] = host_info
 
     def pop_host(self, url):
         """
         Pop with fd. The fd will be removed
         :param url:
-        :return: {'fd': fd}
+        :return: {'fd': fd, 'client_id': client_id, 'send_req_proxy': send_req_proxy}
         """
         return self.HOSTS.pop(url)
 

@@ -6,6 +6,7 @@ ERR_UNKNOWN_REQUEST = 100
 ERR_UNREGISTERED_CLIENT_ID = 101
 ERR_UNSUPPORTED_PROTOCOL = 102
 ERR_URL_EXISTED = 103
+ERR_CLIENT_ID_NOT_EXIST = 104
 
 MSG = {
     ERR_SUCCESS: "Success",
@@ -15,6 +16,7 @@ MSG = {
     ERR_UNREGISTERED_CLIENT_ID: "This connection has no login",
     ERR_UNSUPPORTED_PROTOCOL: "Unsupported protocol",
     ERR_URL_EXISTED: "url existed",
+    ERR_CLIENT_ID_NOT_EXIST: "client id not exist in server",
 }
 
 

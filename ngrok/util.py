@@ -66,6 +66,17 @@ def generate_req_proxy():
     return conform_resp(buffer)
 
 
+def generate_start_proxy(url, client_addr):
+    payload = dict()
+    payload['Url'] = url
+    payload['ClientAddr'] = client_addr
+    body = dict()
+    body['Type'] = 'StartProxy'
+    body['Payload'] = payload
+    buffer = json.dumps(body)
+    return conform_resp(buffer)
+
+
 def md5(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest().lower()
 
