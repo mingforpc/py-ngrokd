@@ -95,8 +95,8 @@ class HttpHandler:
                 :return:
                 """
                 if len(self.resp_list) == 0 and self.writing_resp is None:
-                    self.loop.remove_writer(self.fd)
-                    self.process_error()
+                    # self.loop.remove_writer(self.fd)
+                    # self.process_error()
                     return
 
                 try:
