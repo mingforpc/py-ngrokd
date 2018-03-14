@@ -9,7 +9,7 @@ class GlobalCache(object):
 
     def __init__(self):
 
-        # key: url, value: {"fd": fd}
+        # key: url, value: {"fd": fd, "send_req_proxy": coroutine function, }
         self.HOSTS = dict()
 
         # key: client_id, value: {'http': [url, url,...], 'https': [url, url, ..], 'tcp': [port, port, ..]}
@@ -53,14 +53,15 @@ class GlobalCache(object):
     #     """
     #     return self.CONTROL_SOCKET.pop(fd)
 
-    def add_host(self, url, fd):
+    def add_host(self, url, fd, send_req_proxy):
         """
         Add url info to HOSTS
         :param url:
         :param fd:
+        :param send_req_proxy: coroutine function
         :return:
         """
-        host_info = {'fd': fd}
+        host_info = {'fd': fd, 'send_req_proxy': send_req_proxy}
         self.HOSTS[url] = host_info
 
     def pop_host(self, url):
@@ -89,5 +90,14 @@ class GlobalCache(object):
             self.TUNNEL_LIST[client_id]['http'] += url
         elif protocol == 'tcp':
             self.TUNNEL_LIST[client_id]['http'] += port
+
+    def pop_tunnel(self, client_id):
+        """
+        Pop with client_id. The client_id will be removed
+        :param client_id:
+        :return: {'http': [url, url, ...], 'https': [url, url, ...], 'tcp':[port, port, ...]}
+        """
+        return self.TUNNEL_LIST.pop(client_id)
+
 
 GLOBAL_CACHE = GlobalCache()

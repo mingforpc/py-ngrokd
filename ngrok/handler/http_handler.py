@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 import ssl
+import asyncio
 from ngrok.logger import logger
 from ngrok.util import get_http_headers
 from ngrok.global_cache import GLOBAL_CACHE
@@ -49,6 +50,10 @@ class HttpHandler:
                     logger.debug("Http request for url[%s]", url)
 
                     # TODO: 用协程在这里让 NgrokHandler 中的 socket 发送一个ReqProxy命令到客户端，并等待一个proxy连接上。尽可能使用异步的方式
+                    send_req_proxy = GLOBAL_CACHE.HOSTS[url]['send_req_proxy']
+
+                    asyncio.ensure_future(send_req_proxy(), loop=self.loop)
+
                 else:
                     logger.debug("Http request for url[%s], no such url, return 404", url)
 

@@ -6,7 +6,7 @@ from ngrok.err import ERR_SUCCESS, ERR_UNKNOWN_REQUEST, ERR_UNSUPPORTED_PROTOCOL
     get_err_msg
 from ngrok.logger import logger
 from ngrok.global_cache import GLOBAL_CACHE
-from ngrok.util import tolen, generate_auth_resp, generate_new_tunnel, generate_pong
+from ngrok.util import tolen, generate_auth_resp, generate_new_tunnel, generate_pong, generate_req_proxy
 from ngrok.config import DEFAULT_BUF_SIZE
 from ngrok.controler.ngrok_controller import NgrokController
 
@@ -244,7 +244,7 @@ class NgrokHandler:
                 msg = get_err_msg(ERR_URL_EXISTED)
                 return err, msg, generate_new_tunnel(msg)
 
-            GLOBAL_CACHE.add_host(url, self.fd)
+            GLOBAL_CACHE.add_host(url, self.fd, self.prepare_send_req_proxy)
             GLOBAL_CACHE.add_tunnel(self.client_id, protocol, url)
 
             return err, msg, generate_new_tunnel(req_id=req_id, url=url, protocol=protocol)
@@ -283,9 +283,32 @@ class NgrokHandler:
         proxy_socket_list = GLOBAL_CACHE.pop_client_id(self.client_id)
         # TODO: Fixed me, may be should close all the proxy socket here
 
-        del GLOBAL_CACHE.TUNNEL_LIST[self.client_id]
+        tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)
+        for url in tunnels['http']:
+            GLOBAL_CACHE.pop_host(url)
+
+        for url in tunnels['https']:
+            GLOBAL_CACHE.pop_host(url)
 
         try:
             self.conn.close()
         except Exception as ex:
             logger.exception("Exception in process error:", exc_info=ex)
+
+    async def prepare_send_req_proxy(self):
+        """
+        协程函数，让http/https handler调用，将一个req proxy放到发送队列头部，并设置add_writer，发送给client。
+        :return:
+        """
+
+        # Remove the event listener
+        self.loop.remove_reader(self.fd)
+        self.loop.remove_writer(self.fd)
+
+        req_proxy = generate_req_proxy()
+
+        self.resp_list.insert(0, req_proxy)
+
+        self.loop.add_writer(self.fd, self.write_handler)
+
+

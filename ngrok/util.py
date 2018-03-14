@@ -57,6 +57,15 @@ def generate_pong():
     return conform_resp(buffer)
 
 
+def generate_req_proxy():
+    payload = dict()
+    body = dict()
+    body['Type'] = 'ReqProxy'
+    body['Payload'] = payload
+    buffer = json.dumps(body)
+    return conform_resp(buffer)
+
+
 def md5(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest().lower()
 
