@@ -41,8 +41,7 @@ class BaseService(abc.ABC):
             self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.__socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT & socket.SO_REUSEADDR, 1)
 
-            self.__socket.bind((self.host if self.host is not None else DEFAULT_SERVER_HOST,
-                                self.port if self.port is not None else DEFAULT_SERVER_PORT))
+            self.__socket.bind((self.host if self.host is not None else DEFAULT_SERVER_HOST, self.port))
 
             self.__socket.listen(self._listen)
             self.__socket.setblocking(0)

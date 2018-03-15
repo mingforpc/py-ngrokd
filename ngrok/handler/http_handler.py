@@ -52,7 +52,7 @@ class HttpHandler:
                         url = self.protocol + '://' + headers['HOST']
 
                         if url in GLOBAL_CACHE.HOSTS:
-
+                            self.binary_data = data
                             self.url = url
 
                             logger.debug("Http request for url[%s]", url)
@@ -61,7 +61,8 @@ class HttpHandler:
 
                             GLOBAL_CACHE.HTTP_REQUEST_LIST[client_id].append({'get_url_and_addr': self.get_url_and_addr,
                                                                               'insert_http_resp_list': self.insert_resp_list,
-                                                                              'set_insert_proxy_resp_list': self.set_insert_data_to_proxy_func})
+                                                                              'set_insert_proxy_resp_list': self.set_insert_data_to_proxy_func,
+                                                                              'http_start_proxy': self.start_proxy})
 
                             # TODO: 用协程在这里让 NgrokHandler 中的 socket 发送一个ReqProxy命令到客户端，并等待一个proxy连接上。尽可能使用异步的方式
                             send_req_proxy = GLOBAL_CACHE.HOSTS[url]['send_req_proxy']
@@ -84,7 +85,7 @@ class HttpHandler:
                 header += "\r\n" + "%s"
                 buf = header % (len(html.encode('utf-8')), html)
 
-                self.resp_list.append(buf)
+                self.resp_list.append(buf.encode('utf-8'))
 
                 self.loop.remove_reader(self.fd)
                 self.loop.add_writer(self.fd, self.write_handler)
@@ -102,9 +103,10 @@ class HttpHandler:
                 try:
 
                     if self.writing_resp is None:
-                        self.writing_resp = self.resp_list.pop()
+                        self.writing_resp = self.resp_list[0]
+                        self.resp_list = self.resp_list[1:]
 
-                    sent_bytes = self.conn.send(self.writing_resp.encode('utf-8'))
+                    sent_bytes = self.conn.send(self.writing_resp)
                     if sent_bytes < len(self.writing_resp):
                         self.writing_resp = self.writing_resp[sent_bytes:]
                     else:
@@ -152,3 +154,9 @@ class HttpHandler:
                 """
                 self.loop.remove_reader(self.conn.fileno())
                 self.conn.close()
+
+            def start_proxy(self):
+                if self.insert_data_to_proxy_func is not None:
+                    self.insert_data_to_proxy_func(self.binary_data)
+
+                self.loop.add_writer(self.fd, self.write_handler)

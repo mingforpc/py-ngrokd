@@ -32,6 +32,10 @@ class NgrokHandler:
 
         # 表示是否是proxy连接
         self.is_proxy = False
+
+        # 表示是否已经开始proxy连接
+        self.proxy_started = False
+
         # 浏览器客户端的网络地址
         self.browser_addr = None
         # 代理的url
@@ -41,6 +45,8 @@ class NgrokHandler:
         # 仅用于Proxy连接
         # 用来将读取回来的数据插入到 http handler 的 resp_list 中
         self.insert_http_resp_list = None
+
+        self.http_start_proxy = None
 
     def read_handler(self):
         """
@@ -157,15 +163,17 @@ class NgrokHandler:
         try:
 
             if self.writing_resp is None:
-                self.writing_resp = self.resp_list.pop()
+                self.writing_resp = self.resp_list[0]
+                self.resp_list = self.resp_list[1:]
 
             sent_bytes = self.conn.send(self.writing_resp)
             if sent_bytes < len(self.writing_resp):
                 self.writing_resp = self.writing_resp[sent_bytes:]
             else:
                 self.writing_resp = None
-                self.loop.remove_writer(self.fd)
-                self.loop.add_reader(self.fd, self.read_handler)
+                if len(self.resp_list) == 0:
+                    self.loop.remove_writer(self.fd)
+                    self.loop.add_reader(self.fd, self.read_handler)
 
         except ssl.SSLWantReadError as ex:
             logger.debug("SSLWantReadError")
@@ -202,7 +210,10 @@ class NgrokHandler:
             self.process_error()
         elif err == ERR_SUCCESS:
             self.resp_list.append(resp)
-            self.loop.remove_reader(self.fd)
+
+            if req_type == 'RegProxy':
+                self.http_start_proxy()
+
             self.loop.remove_reader(self.fd)
             self.loop.add_writer(self.fd, self.write_handler)
 
@@ -316,6 +327,9 @@ class NgrokHandler:
 
             self.url, self.browser_addr = get_url_and_addr()
             resp = generate_start_proxy(self.url, self.browser_addr)
+
+            self.http_start_proxy = func_dict['http_start_proxy']
+            # http_start_proxy()
 
         return err, msg, resp
 

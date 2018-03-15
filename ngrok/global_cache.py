@@ -18,6 +18,7 @@ class GlobalCache(object):
         # key: client id, value: [
         #                         {'get_url_and_addr': function,
         #                          'insert_http_resp_list': function,
+        #                          'http_start_proxy': function,
         #                          'set_insert_proxy_resp_list': function},
         #                        ...]
         self.HTTP_REQUEST_LIST = dict()
@@ -90,11 +91,11 @@ class GlobalCache(object):
             self.TUNNEL_LIST[client_id] = {'http': [], 'https': [], 'tcp': []}
 
         if protocol == 'http':
-            self.TUNNEL_LIST[client_id]['http'] += url
+            self.TUNNEL_LIST[client_id]['http'].append(url)
         elif protocol == 'https':
-            self.TUNNEL_LIST[client_id]['http'] += url
+            self.TUNNEL_LIST[client_id]['http'].append(url)
         elif protocol == 'tcp':
-            self.TUNNEL_LIST[client_id]['http'] += port
+            self.TUNNEL_LIST[client_id]['http'].append(port)
 
     def pop_tunnel(self, client_id):
         """

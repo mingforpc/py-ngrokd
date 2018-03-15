@@ -12,13 +12,9 @@ s = BaseService(event_loop, NgrokHandler, is_ssl=True, cert_file=CONFIG_FILE_PAT
 
 http = BaseService(event_loop, HttpHandler, port=DEFAULT_SERVER_HTTP)
 
-# tasks = [event_loop.create_task(s.start()),
-#          event_loop.create_task(http.start())]
-
 
 event_loop.set_debug(True)
 asyncio.ensure_future(http.start(), loop=event_loop)
 asyncio.ensure_future(s.start(), loop=event_loop)
 
-# event_loop.run_until_complete(asyncio.gather(s.start(), http.start()))
 event_loop.run_forever()
