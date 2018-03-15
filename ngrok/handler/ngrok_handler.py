@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
+import asyncio
 import ssl
 import json
 from ngrok.err import ERR_SUCCESS, ERR_UNKNOWN_REQUEST, ERR_UNSUPPORTED_PROTOCOL, ERR_URL_EXISTED, ERR_CLOSE_SOCKET, \
@@ -50,7 +51,14 @@ class NgrokHandler:
 
     def read_handler(self):
         """
-         处理read回调。
+        对外的read回调, 将处理read扔给协程
+        :return:
+        """
+        asyncio.ensure_future(self.__read_handler(), loop=self.loop)
+
+    async def __read_handler(self):
+        """
+        协程，真正处理read回调。
         :return:
         """
         try:
@@ -63,6 +71,7 @@ class NgrokHandler:
         else:
 
             if self.is_proxy is True:
+                # 如果是Proxy连接，将数据直接传给http handler
                 self.insert_http_resp_list(data)
             else:
 
@@ -97,6 +106,13 @@ class NgrokHandler:
                     self.binary_data = bytearray(data[request_size + 8:])
 
     def continue_read_handler(self):
+        """
+        处理之前请求过大没接收完的请求。扔给协程处理
+        :return:
+        """
+        asyncio.ensure_future(self.__continue_read_handler(), loop=self.loop)
+
+    async def __continue_read_handler(self):
         """
         处理read回调。用来处理请求过大没有一次接收完的。
         :return:
@@ -150,6 +166,13 @@ class NgrokHandler:
                 self.loop.remove_reader(self.fd)
 
     def write_handler(self):
+        """
+
+        :return:
+        """
+        asyncio.ensure_future(self.__write_handler(), loop=self.loop)
+
+    async def __write_handler(self):
         """
         处理写回调。
         :return:
@@ -356,7 +379,7 @@ class NgrokHandler:
         self.loop.remove_reader(self.fd)
         self.loop.remove_writer(self.fd)
 
-        proxy_socket_list = GLOBAL_CACHE.pop_client_id(self.client_id)
+        GLOBAL_CACHE.pop_client_id(self.client_id)
         # TODO: Fixed me, may be should close all the proxy socket here
 
         tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)

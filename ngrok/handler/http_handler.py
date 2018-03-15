@@ -34,6 +34,9 @@ class HttpHandler:
                 self.insert_data_to_proxy_func = None
 
             def read_handler(self):
+                asyncio.ensure_future(self.__read_handler(), loop=self.loop)
+
+            async def __read_handler(self):
                 """
                 处理read回调
                 :return:
@@ -91,6 +94,13 @@ class HttpHandler:
                 self.loop.add_writer(self.fd, self.write_handler)
 
             def write_handler(self):
+                """
+
+                :return:
+                """
+                asyncio.ensure_future(self.__write_handler(), loop=self.loop)
+
+            async def __write_handler(self):
                 """
                 处理写回调。
                 :return:

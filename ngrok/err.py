@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
+
 
 ERR_SUCCESS = 0
 ERR_FAILED = 1
