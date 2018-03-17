@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
+from asyncio import Queue
 
 
 class GlobalCache(object):
@@ -26,6 +27,15 @@ class GlobalCache(object):
         #                        ...]
         self.HTTP_REQUEST_LIST = dict()
 
+        # key: client id, value: [
+        #                        {'url_and_addr_queue': Queue,
+        #                        },
+        #                        ...]
+        self.HTTP_REQUEST_LIST_V2 = dict()
+
+        # key: client id, value: Queue()
+        self.SEND_REQ_PROXY_LIST = dict()
+
         # key: fd, value: client id
         # self.CONTROL_SOCKET = dict()
 
@@ -35,6 +45,7 @@ class GlobalCache(object):
         :return:
         """
         self.HTTP_REQUEST_LIST[client_id] = []
+        self.SEND_REQ_PROXY_LIST[client_id] = Queue()
 
     def pop_client_id(self, client_id):
         """

@@ -261,6 +261,10 @@ class NgrokHandler:
         else:
             self.client_id = client_id
             GLOBAL_CACHE.add_client_id(client_id)
+
+            # 准备接收 req_proxy 的命令
+            asyncio.ensure_future(self.waiting_send_req_proxy(), loop=self.loop)
+
             resp = generate_auth_resp(client_id=client_id)
 
         return err, msg, resp
@@ -383,6 +387,9 @@ class NgrokHandler:
         # TODO: Fixed me, may be should close all the proxy socket here
 
         tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)
+
+        asyncio.ensure_future(GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id].put('close'), loop=self.loop)
+
         for url in tunnels['http']:
             GLOBAL_CACHE.pop_host(url)
 
@@ -393,6 +400,21 @@ class NgrokHandler:
             self.conn.close()
         except Exception as ex:
             logger.exception("Exception in process error:", exc_info=ex)
+
+    async def waiting_send_req_proxy(self):
+        """
+        等待发送req_proxy命令给客户端
+        :return:
+        """
+
+        while True:
+            queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id]
+            value = await queue.get()
+
+            if value == 'close':
+                break
+            else:
+                asyncio.ensure_future(self.prepare_send_req_proxy(), loop=self.loop)
 
     async def prepare_send_req_proxy(self):
         """
