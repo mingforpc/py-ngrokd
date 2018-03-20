@@ -67,7 +67,7 @@ class NgrokHandler:
             return
 
         if not data:
-            self.process_error()
+            asyncio.ensure_future(self.process_error(), loop=self.loop)
         else:
 
             if self.is_proxy is True:
@@ -180,7 +180,7 @@ class NgrokHandler:
 
         if len(self.resp_list) == 0 and self.writing_resp is None:
             self.loop.remove_writer(self.fd)
-            self.process_error()
+            asyncio.ensure_future(self.process_error(), loop=self.loop)
             return
 
         try:
@@ -212,7 +212,7 @@ class NgrokHandler:
             request = json.loads(str(request_data, 'utf-8'))
         except Exception as ex:
             logger.exception("Exception in process_request, load request:", exc_info=ex)
-            self.process_error()
+            asyncio.ensure_future(self.process_error(), loop=self.loop)
             return
 
         req_type = request.get('Type', None)
@@ -230,7 +230,7 @@ class NgrokHandler:
             err, msg, resp = ERR_UNKNOWN_REQUEST, get_err_msg(ERR_UNKNOWN_REQUEST), None
 
         if err in (ERR_UNKNOWN_REQUEST, ERR_CLOSE_SOCKET):
-            self.process_error()
+            asyncio.ensure_future(self.process_error(), loop=self.loop)
         elif err == ERR_SUCCESS:
             self.resp_list.append(resp)
 
@@ -375,7 +375,7 @@ class NgrokHandler:
             msg = get_err_msg(ERR_SUCCESS)
             return err, msg, generate_pong()
 
-    def process_error(self):
+    async def process_error(self):
         """
         处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
         :return:
@@ -395,6 +395,10 @@ class NgrokHandler:
 
         for url in tunnels['https']:
             GLOBAL_CACHE.pop_host(url)
+
+        queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
+
+        await queue.put('close')
 
         try:
             self.conn.close()

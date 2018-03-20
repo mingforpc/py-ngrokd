@@ -47,7 +47,7 @@ class HttpHandler:
                     return
 
                 if not data:
-                    self.process_error()
+                    asyncio.ensure_future(self.process_error(), loop=self.loop)
                 else:
                     headers = get_http_headers(data.decode('utf-8'))
 
@@ -107,7 +107,7 @@ class HttpHandler:
                 """
                 if len(self.resp_list) == 0 and self.writing_resp is None:
                     # self.loop.remove_writer(self.fd)
-                    # self.process_error()
+                    # asyncio.ensure_future(self.process_error(), loop=self.loop)
                     return
 
                 try:
@@ -128,7 +128,7 @@ class HttpHandler:
                     logger.debug("SSLWantReadError")
                 except Exception as ex:
                     logger.exception("Exception in write_handler:", exc_info=ex)
-                    self.process_error()
+                    asyncio.ensure_future(self.process_error(), loop=self.loop)
 
             def get_url_and_addr(self):
                 """
@@ -157,7 +157,7 @@ class HttpHandler:
                 """
                 self.insert_data_to_proxy_func = func
 
-            def process_error(self):
+            async def process_error(self):
                 """
                 处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
                 :return:
