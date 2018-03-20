@@ -36,6 +36,9 @@ class GlobalCache(object):
         # key: client id, value: Queue()
         self.SEND_REQ_PROXY_LIST = dict()
 
+        # key: client id, value: Queue([{'url': url, 'addr': addr}, ...])
+        self.PROXY_URL_ADDR_LIST = dict()
+
         # key: fd, value: client id
         # self.CONTROL_SOCKET = dict()
 
@@ -46,6 +49,7 @@ class GlobalCache(object):
         """
         self.HTTP_REQUEST_LIST[client_id] = []
         self.SEND_REQ_PROXY_LIST[client_id] = Queue()
+        self.PROXY_URL_ADDR_LIST[client_id] = Queue()
 
     def pop_client_id(self, client_id):
         """

@@ -30,6 +30,9 @@ class HttpHandler:
 
                 self.url = None
 
+                # 这个http请求将会关联到的client id
+                self.client_id = None
+
                 # 来之ngrok_handler的方法，是用来给proxy连接插入发送数据队列的
                 self.insert_data_to_proxy_func = None
 
@@ -60,15 +63,18 @@ class HttpHandler:
 
                             logger.debug("Http request for url[%s]", url)
 
-                            client_id = GLOBAL_CACHE.HOSTS[url]['client_id']
+                            self.client_id = GLOBAL_CACHE.HOSTS[url]['client_id']
 
-                            GLOBAL_CACHE.HTTP_REQUEST_LIST[client_id].append({'get_url_and_addr': self.get_url_and_addr,
+                            GLOBAL_CACHE.HTTP_REQUEST_LIST[self.client_id].append({
+                                                                              # 'get_url_and_addr': self.get_url_and_addr,
                                                                               'insert_http_resp_list': self.insert_resp_list,
                                                                               'set_insert_proxy_resp_list': self.set_insert_data_to_proxy_func,
                                                                               'http_start_proxy': self.start_proxy})
 
+                            asyncio.ensure_future(self.set_url_and_addr(), loop=self.loop)
+
                             # TODO: 用协程在这里让 NgrokHandler 中的 socket 发送一个ReqProxy命令到客户端，并等待一个proxy连接上。尽可能使用异步的方式
-                            queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST[client_id]
+                            queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id]
                             asyncio.ensure_future(queue.put('send'), loop=self.loop)
 
                         else:
@@ -130,15 +136,17 @@ class HttpHandler:
                     logger.exception("Exception in write_handler:", exc_info=ex)
                     asyncio.ensure_future(self.process_error(), loop=self.loop)
 
-            def get_url_and_addr(self):
+            async def set_url_and_addr(self):
                 """
-                返回url和 浏览器客户端的网络地址
+                将url和 浏览器客户端的网络地址 设置到queue中
                 :return:
                 """
                 socket_info = self.conn.getpeername()
                 browser_addr = socket_info[0] + ':' + str(socket_info[1])
 
-                return self.url, browser_addr
+                url_and_addr = {'url': self.url, 'addr': browser_addr}
+                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST[self.client_id]
+                await queue.put(url_and_addr)
 
             def insert_resp_list(self, resp):
                 """
@@ -162,6 +170,12 @@ class HttpHandler:
                 处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
                 :return:
                 """
+
+                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
+
+                if queue is not None:
+                    queue.put('close')
+
                 self.loop.remove_reader(self.conn.fileno())
                 self.conn.close()
 

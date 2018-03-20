@@ -93,14 +93,14 @@ class NgrokHandler:
                     logger.debug("receive control request: %s", request_data)
 
                     # TODO: 在这里要做处理请求
-                    self.process_request(request_data)
+                    await self.process_request(request_data)
 
                     self.loop.remove_reader(self.fd)
                 else:
 
                     request_data = data[8:request_size + 8]
                     # TODO: 在这里要做处理请求
-                    self.process_request(request_data)
+                    await self.process_request(request_data)
 
                     # 有TCP粘包
                     self.binary_data = bytearray(data[request_size + 8:])
@@ -145,7 +145,7 @@ class NgrokHandler:
 
                 logger.debug("receive control request: %s", request_data)
                 # TODO: 在这里要做处理请求
-                self.process_request(request_data)
+                await self.process_request(request_data)
 
                 # 移除已处理请求的数据
                 self.binary_data = self.binary_data[8 + request_size:]
@@ -158,7 +158,7 @@ class NgrokHandler:
                 logger.debug("receive control request: %s", request_data)
 
                 # TODO: 在这里要做处理请求
-                self.process_request(request_data)
+                await self.process_request(request_data)
 
                 self.binary_data = None
 
@@ -202,7 +202,7 @@ class NgrokHandler:
             logger.debug("SSLWantReadError")
             return
 
-    def process_request(self, request_data):
+    async def process_request(self, request_data):
         """
         处理读取到的请求命令
         :param request_data: 读取到的请求数据，会在本函数中转为json格式
@@ -222,7 +222,7 @@ class NgrokHandler:
         elif req_type == 'ReqTunnel':
             err, msg, resp = self.req_tunnel_process(request)
         elif req_type == 'RegProxy':
-            err, msg, resp = self.reg_proxy_process(request)
+            err, msg, resp = await self.reg_proxy_process(request)
         elif req_type == 'Ping':
             err, msg, resp = self.ping_process()
         else:
@@ -313,7 +313,7 @@ class NgrokHandler:
 
             return err, msg, generate_new_tunnel(msg)
 
-    def reg_proxy_process(self, request):
+    async def reg_proxy_process(self, request):
         """
         处理reg_proxy请求。一定不能在控制连接（指的是接收其他请求的连接）中接收到此请求。
         收到reg_proxy，表示此连接是用来做代理的连接。
@@ -350,9 +350,17 @@ class NgrokHandler:
 
             set_insert_proxy_resp_list(insert_proxy_resp_list)
 
-            get_url_and_addr = func_dict['get_url_and_addr']
+            # get_url_and_addr = func_dict['get_url_and_addr']
 
-            self.url, self.browser_addr = get_url_and_addr()
+            # self.url, self.browser_addr = get_url_and_addr()
+
+            url_and_addr = await GLOBAL_CACHE.PROXY_URL_ADDR_LIST[self.client_id].get()
+            if url_and_addr == 'close':
+                asyncio.ensure_future(self.process_error(), loop=self.loop)
+                return
+
+            self.url, self.browser_addr = url_and_addr['url'], url_and_addr['addr']
+
             resp = generate_start_proxy(self.url, self.browser_addr)
 
             self.http_start_proxy = func_dict['http_start_proxy']
@@ -396,9 +404,14 @@ class NgrokHandler:
         for url in tunnels['https']:
             GLOBAL_CACHE.pop_host(url)
 
-        queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
+        send_req_proxy_queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
 
-        await queue.put('close')
+        await send_req_proxy_queue.put('close')
+
+        queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
+
+        if queue is not None:
+            queue.put('close')
 
         try:
             self.conn.close()
