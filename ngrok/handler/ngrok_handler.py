@@ -49,6 +49,9 @@ class NgrokHandler:
 
         self.http_start_proxy = None
 
+        # 用来与 相关联的 http socket 在消息队列(Queue, redis...)中进行通信的标识
+        self.communicate_identify = None
+
     def read_handler(self):
         """
         对外的read回调, 将处理read扔给协程
@@ -359,7 +362,9 @@ class NgrokHandler:
                 asyncio.ensure_future(self.process_error(), loop=self.loop)
                 return
 
-            self.url, self.browser_addr = url_and_addr['url'], url_and_addr['addr']
+            # TODO: 使用 communicate_identify 在消息队列(Queue, redis..)中进行交换数据
+            self.url, self.browser_addr, self.communicate_identify = (url_and_addr['url'], url_and_addr['addr'],
+                                                                      url_and_addr['communicate_identify'])
 
             resp = generate_start_proxy(self.url, self.browser_addr)
 

@@ -20,7 +20,7 @@ class GlobalCache(object):
         self.TUNNEL_LIST = dict()
 
         # key: client id, value: [
-        #                         {'get_url_and_addr': function,
+        #                         {
         #                          'insert_http_resp_list': function,
         #                          'http_start_proxy': function,
         #                          'set_insert_proxy_resp_list': function},

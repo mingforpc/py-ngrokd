@@ -1,186 +1,202 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 import ssl
+import time
 import asyncio
 from ngrok.logger import logger
 from ngrok.util import get_http_headers
 from ngrok.global_cache import GLOBAL_CACHE
 from ngrok.config import DEFAULT_BUF_SIZE
-
+from ngrok.util import md5
 
 class HttpHandler:
 
-            protocol = 'http'
+        protocol = 'http'
 
-            def __init__(self, conn, loop):
-                """
+        def __init__(self, conn, loop):
+            """
 
-                :param conn: client socket
-                :param loop: event loop
-                """
-                self.conn = conn
-                self.loop = loop
+            :param conn: client socket
+            :param loop: event loop
+            """
+            self.conn = conn
+            self.loop = loop
 
-                self.fd = conn.fileno()
+            self.fd = conn.fileno()
 
-                self.binary_data = None
+            self.binary_data = None
 
-                self.resp_list = []
-                self.writing_resp = None
+            self.resp_list = []
+            self.writing_resp = None
 
-                self.url = None
+            self.url = None
 
-                # 这个http请求将会关联到的client id
-                self.client_id = None
+            # 这个http请求将会关联到的client id
+            self.client_id = None
 
-                # 来之ngrok_handler的方法，是用来给proxy连接插入发送数据队列的
-                self.insert_data_to_proxy_func = None
+            # 来之ngrok_handler的方法，是用来给proxy连接插入发送数据队列的
+            self.insert_data_to_proxy_func = None
 
-            def read_handler(self):
-                asyncio.ensure_future(self.__read_handler(), loop=self.loop)
+            # 用来与 相关联的 proxy socket 在消息队列(Queue, redis...)中进行通信的标识
+            self.communicate_identify = None
 
-            async def __read_handler(self):
-                """
-                处理read回调
-                :return:
-                """
-                try:
-                    data = self.conn.recv(DEFAULT_BUF_SIZE)
-                except ssl.SSLWantReadError:
-                    return
+        def read_handler(self):
+            asyncio.ensure_future(self.__read_handler(), loop=self.loop)
 
-                if not data:
-                    asyncio.ensure_future(self.process_error(), loop=self.loop)
+        async def __read_handler(self):
+            """
+            处理read回调
+            :return:
+            """
+            try:
+                data = self.conn.recv(DEFAULT_BUF_SIZE)
+            except ssl.SSLWantReadError:
+                return
+
+            if not data:
+                asyncio.ensure_future(self.process_error(), loop=self.loop)
+            else:
+                headers = get_http_headers(data.decode('utf-8'))
+
+                if 'HOST' in headers:
+                    url = self.protocol + '://' + headers['HOST']
+
+                    if url in GLOBAL_CACHE.HOSTS:
+                        self.binary_data = data
+                        self.url = url
+
+                        logger.debug("Http request for url[%s]", url)
+
+                        self.client_id = GLOBAL_CACHE.HOSTS[url]['client_id']
+
+                        GLOBAL_CACHE.HTTP_REQUEST_LIST[self.client_id].append({
+                                                                          # 'get_url_and_addr': self.get_url_and_addr,
+                                                                          'insert_http_resp_list': self.insert_resp_list,
+                                                                          'set_insert_proxy_resp_list': self.set_insert_data_to_proxy_func,
+                                                                          'http_start_proxy': self.start_proxy})
+
+                        asyncio.ensure_future(self.set_url_and_addr(), loop=self.loop)
+
+                        # TODO: 用协程在这里让 NgrokHandler 中的 socket 发送一个ReqProxy命令到客户端，并等待一个proxy连接上。尽可能使用异步的方式
+                        queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id]
+                        asyncio.ensure_future(queue.put('send'), loop=self.loop)
+
+                    else:
+                        logger.debug("Http request for url[%s], no such url, return 404", url)
+
+                        # Can not find the tunnel
+                        # Return 404 to browser
+                        self.send_404(headers['HOST'])
                 else:
-                    headers = get_http_headers(data.decode('utf-8'))
+                    # No 'HOST' in http headers
+                    self.send_404('without host in header')
 
-                    if 'HOST' in headers:
-                        url = self.protocol + '://' + headers['HOST']
+        def send_404(self, host):
+            html = 'Tunnel %s not found' % host
+            header = 'HTTP/1.0 404 Not Found\r\n'
+            header += 'Content-Length: %d\r\n'
+            header += "\r\n" + "%s"
+            buf = header % (len(html.encode('utf-8')), html)
 
-                        if url in GLOBAL_CACHE.HOSTS:
-                            self.binary_data = data
-                            self.url = url
+            self.resp_list.append(buf.encode('utf-8'))
 
-                            logger.debug("Http request for url[%s]", url)
+            self.loop.remove_reader(self.fd)
+            self.loop.add_writer(self.fd, self.write_handler)
 
-                            self.client_id = GLOBAL_CACHE.HOSTS[url]['client_id']
+        def write_handler(self):
+            """
 
-                            GLOBAL_CACHE.HTTP_REQUEST_LIST[self.client_id].append({
-                                                                              # 'get_url_and_addr': self.get_url_and_addr,
-                                                                              'insert_http_resp_list': self.insert_resp_list,
-                                                                              'set_insert_proxy_resp_list': self.set_insert_data_to_proxy_func,
-                                                                              'http_start_proxy': self.start_proxy})
+            :return:
+            """
+            asyncio.ensure_future(self.__write_handler(), loop=self.loop)
 
-                            asyncio.ensure_future(self.set_url_and_addr(), loop=self.loop)
+        async def __write_handler(self):
+            """
+            处理写回调。
+            :return:
+            """
+            if len(self.resp_list) == 0 and self.writing_resp is None:
+                # self.loop.remove_writer(self.fd)
+                # asyncio.ensure_future(self.process_error(), loop=self.loop)
+                return
 
-                            # TODO: 用协程在这里让 NgrokHandler 中的 socket 发送一个ReqProxy命令到客户端，并等待一个proxy连接上。尽可能使用异步的方式
-                            queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id]
-                            asyncio.ensure_future(queue.put('send'), loop=self.loop)
+            try:
 
-                        else:
-                            logger.debug("Http request for url[%s], no such url, return 404", url)
+                if self.writing_resp is None:
+                    self.writing_resp = self.resp_list[0]
+                    self.resp_list = self.resp_list[1:]
 
-                            # Can not find the tunnel
-                            # Return 404 to browser
-                            self.send_404(headers['HOST'])
-                    else:
-                        # No 'HOST' in http headers
-                        self.send_404('without host in header')
+                sent_bytes = self.conn.send(self.writing_resp)
+                if sent_bytes < len(self.writing_resp):
+                    self.writing_resp = self.writing_resp[sent_bytes:]
+                else:
+                    self.writing_resp = None
+                    self.loop.remove_writer(self.fd)
+                    self.loop.add_reader(self.fd, self.read_handler)
 
-            def send_404(self, host):
-                html = 'Tunnel %s not found' % host
-                header = 'HTTP/1.0 404 Not Found\r\n'
-                header += 'Content-Length: %d\r\n'
-                header += "\r\n" + "%s"
-                buf = header % (len(html.encode('utf-8')), html)
+            except ssl.SSLWantReadError as ex:
+                logger.debug("SSLWantReadError")
+            except Exception as ex:
+                logger.exception("Exception in write_handler:", exc_info=ex)
+                asyncio.ensure_future(self.process_error(), loop=self.loop)
 
-                self.resp_list.append(buf.encode('utf-8'))
+        async def set_url_and_addr(self):
+            """
+            将url和 浏览器客户端的网络地址 设置到queue中
+            :return:
+            """
+            socket_info = self.conn.getpeername()
+            browser_addr = socket_info[0] + ':' + str(socket_info[1])
 
-                self.loop.remove_reader(self.fd)
-                self.loop.add_writer(self.fd, self.write_handler)
+            # TODO: 使用 communicate_identify 在消息队列(Queue, redis..)中进行交换数据
+            self.communicate_identify = self.__generate_identify(browser_addr)
 
-            def write_handler(self):
-                """
+            url_and_addr = {'url': self.url, 'addr': browser_addr, 'communicate_identify': self.communicate_identify}
+            queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST[self.client_id]
+            await queue.put(url_and_addr)
 
-                :return:
-                """
-                asyncio.ensure_future(self.__write_handler(), loop=self.loop)
+        def __generate_identify(self, browser_addr):
+            """
+            通过 MD5(client_id + browser_addr + timestamp) 生成一个与 proxy socket相关联的唯一标识。
+            以后 http socket 可以通过这个标识在消息队列（Queue，redis...）中与 proxy socket进行通信。
+            :return:
+            """
+            str_val = str(self.client_id) + str(browser_addr) + str(time.time())
+            return md5(str_val)
 
-            async def __write_handler(self):
-                """
-                处理写回调。
-                :return:
-                """
-                if len(self.resp_list) == 0 and self.writing_resp is None:
-                    # self.loop.remove_writer(self.fd)
-                    # asyncio.ensure_future(self.process_error(), loop=self.loop)
-                    return
+        def insert_resp_list(self, resp):
+            """
+            将resp插入队列末尾
+            :param resp:
+            :return:
+            """
+            self.resp_list.append(resp)
 
-                try:
+        def set_insert_data_to_proxy_func(self, func):
+            """
+            设置一个function。
+            self.insert_data_to_proxy_func 是一个用来将读取回来的数据插入proxy的resp_list中的方法
+            :param func:
+            :return:
+            """
+            self.insert_data_to_proxy_func = func
 
-                    if self.writing_resp is None:
-                        self.writing_resp = self.resp_list[0]
-                        self.resp_list = self.resp_list[1:]
+        async def process_error(self):
+            """
+            处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
+            :return:
+            """
 
-                    sent_bytes = self.conn.send(self.writing_resp)
-                    if sent_bytes < len(self.writing_resp):
-                        self.writing_resp = self.writing_resp[sent_bytes:]
-                    else:
-                        self.writing_resp = None
-                        self.loop.remove_writer(self.fd)
-                        self.loop.add_reader(self.fd, self.read_handler)
+            queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
 
-                except ssl.SSLWantReadError as ex:
-                    logger.debug("SSLWantReadError")
-                except Exception as ex:
-                    logger.exception("Exception in write_handler:", exc_info=ex)
-                    asyncio.ensure_future(self.process_error(), loop=self.loop)
+            if queue is not None:
+                queue.put('close')
 
-            async def set_url_and_addr(self):
-                """
-                将url和 浏览器客户端的网络地址 设置到queue中
-                :return:
-                """
-                socket_info = self.conn.getpeername()
-                browser_addr = socket_info[0] + ':' + str(socket_info[1])
+            self.loop.remove_reader(self.conn.fileno())
+            self.conn.close()
 
-                url_and_addr = {'url': self.url, 'addr': browser_addr}
-                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST[self.client_id]
-                await queue.put(url_and_addr)
+        def start_proxy(self):
+            if self.insert_data_to_proxy_func is not None:
+                self.insert_data_to_proxy_func(self.binary_data)
 
-            def insert_resp_list(self, resp):
-                """
-                将resp插入队列末尾
-                :param resp:
-                :return:
-                """
-                self.resp_list.append(resp)
-
-            def set_insert_data_to_proxy_func(self, func):
-                """
-                设置一个function。
-                self.insert_data_to_proxy_func 是一个用来将读取回来的数据插入proxy的resp_list中的方法
-                :param func:
-                :return:
-                """
-                self.insert_data_to_proxy_func = func
-
-            async def process_error(self):
-                """
-                处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
-                :return:
-                """
-
-                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
-
-                if queue is not None:
-                    queue.put('close')
-
-                self.loop.remove_reader(self.conn.fileno())
-                self.conn.close()
-
-            def start_proxy(self):
-                if self.insert_data_to_proxy_func is not None:
-                    self.insert_data_to_proxy_func(self.binary_data)
-
-                self.loop.add_writer(self.fd, self.write_handler)
+            self.loop.add_writer(self.fd, self.write_handler)
