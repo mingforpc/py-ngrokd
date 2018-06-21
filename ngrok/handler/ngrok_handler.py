@@ -363,9 +363,6 @@ class NgrokHandler:
             else:
                 asyncio.ensure_future(self.process_error(), loop=self.loop)
 
-            # self.http_start_proxy = func_dict['http_start_proxy']
-            # http_start_proxy()
-
         return err, msg, resp
 
     def ping_process(self):
