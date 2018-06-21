@@ -19,19 +19,15 @@ class GlobalCache(object):
         # key: client_id, value: {'http': [url, url,...], 'https': [url, url, ..], 'tcp': [port, port, ..]}
         self.TUNNEL_LIST = dict()
 
-        # key: client id, value: [
-        #                         {
-        #                          'insert_http_resp_list': function,
-        #                          'http_start_proxy': function,
-        #                          'set_insert_proxy_resp_list': function},
-        #                        ...]
-        self.HTTP_REQUEST_LIST = dict()
-
-        # key: client id, value: [
-        #                        {'url_and_addr_queue': Queue,
+        # key: communicate_identify, value: [
+        #                        {'http_resp_queue': Queue, // 给ngrok_handler来插入返回给浏览器的响应
+        #                         'http_req_queue': Queue // 给http_handler来插入浏览器给服务端（client）的请求
+        #                         'control_http_queue': Queue // 用来发送控制信息的消息队列，针对浏览器->服务端的连接, 让 http_handler 控制 ngrok_handler(命令有: close)
+        #                         'control_proxy_queue': Queue // 用来发送控制信息的消息队列，针对客户端->服务端的连接, 让 ngrok_handler 控制 http_handler(命令有: close)
         #                        },
         #                        ...]
-        self.HTTP_REQUEST_LIST_V2 = dict()
+        # communicate_identify = md5(client_id + browser_addr + timestamp)
+        self.HTTP_COMMU_QUEUE_MAP = dict()
 
         # key: client id, value: Queue()
         self.SEND_REQ_PROXY_LIST = dict()
@@ -39,42 +35,40 @@ class GlobalCache(object):
         # key: client id, value: Queue([{'url': url, 'addr': addr}, ...])
         self.PROXY_URL_ADDR_LIST = dict()
 
-        # key: fd, value: client id
-        # self.CONTROL_SOCKET = dict()
-
     def add_client_id(self, client_id):
         """
         add new client id
         :return:
         """
-        self.HTTP_REQUEST_LIST[client_id] = []
         self.SEND_REQ_PROXY_LIST[client_id] = Queue()
         self.PROXY_URL_ADDR_LIST[client_id] = Queue()
 
-    def pop_client_id(self, client_id):
+    def init_http_commu_queue_map(self, communicate_identify):
         """
-        Pop with client id, the client id will be removed
-        :param client_id:
+        初始化对应的communicate_identify的两个消息队列
+        :param communicate_identify:
         :return:
         """
-        return self.HTTP_REQUEST_LIST.pop(client_id)
+        self.HTTP_COMMU_QUEUE_MAP[communicate_identify] = dict()
+        queue_map = self.HTTP_COMMU_QUEUE_MAP[communicate_identify]
+        queue_map['http_resp_queue'] = Queue()
+        queue_map['http_req_queue'] = Queue()
+        queue_map['control_http_queue'] = Queue()
+        queue_map['control_proxy_queue'] = Queue()
 
-    # def add_control_socket(self, fd, client_id):
-    #     """
-    #     add new control socket, bind with client id
-    #     :param fd:
-    #     :param client_id:
-    #     :return:
-    #     """
-    #     self.CONTROL_SOCKET[fd] = client_id
-    #
-    # def pop_control_socket(self, fd):
-    #     """
-    #     Pop with fd. The fd will be removed
-    #     :param fd:
-    #     :return: client_id
-    #     """
-    #     return self.CONTROL_SOCKET.pop(fd)
+    def del_http_commu_queue_map(self, communicate_identify):
+        """
+        删除对应communicate_identify中的消息队列通道（Queue, Redis...）
+        :param communicate_identify:
+        :return:
+        """
+        if communicate_identify in self.HTTP_COMMU_QUEUE_MAP:
+            queue_map = self.HTTP_COMMU_QUEUE_MAP.pop(communicate_identify)
+            if queue_map:
+                queue_map.pop('http_resp_queue')
+                queue_map.pop('http_req_queue')
+                queue_map.pop('control_http_queue')
+                queue_map.pop('control_proxy_queue')
 
     def add_host(self, url, fd, client_id, send_req_proxy):
         """

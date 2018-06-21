@@ -42,15 +42,14 @@ class NgrokHandler:
         # 代理的url
         self.url = None
 
-        # 一个方法对象
-        # 仅用于Proxy连接
-        # 用来将读取回来的数据插入到 http handler 的 resp_list 中
-        self.insert_http_resp_list = None
-
-        self.http_start_proxy = None
-
         # 用来与 相关联的 http socket 在消息队列(Queue, redis...)中进行通信的标识
         self.communicate_identify = None
+
+        # 用来发送给http_handler的控制信息的消息队列, 仅proxy连接使用
+        self.control_http_queue = None
+
+        # 用来接受来之http_handler的控制信息的消息队列, 仅proxy连接使用
+        self.control_proxy_queue = None
 
     def read_handler(self):
         """
@@ -75,7 +74,7 @@ class NgrokHandler:
 
             if self.is_proxy is True:
                 # 如果是Proxy连接，将数据直接传给http handler
-                self.insert_http_resp_list(data)
+                await self.insert_data_to_http_resp_queue(data)
             else:
 
                 request_size = tolen(data[:8])
@@ -95,14 +94,13 @@ class NgrokHandler:
                     request_data = data[8:]
                     logger.debug("receive control request: %s", request_data)
 
-                    # TODO: 在这里要做处理请求
                     await self.process_request(request_data)
 
                     self.loop.remove_reader(self.fd)
                 else:
 
                     request_data = data[8:request_size + 8]
-                    # TODO: 在这里要做处理请求
+
                     await self.process_request(request_data)
 
                     # 有TCP粘包
@@ -132,7 +130,6 @@ class NgrokHandler:
             self.conn.close()
         else:
             request_size = tolen(self.binary_data[:8])
-            print('request_size:' + str(request_size))
             try:
                 self.binary_data.extend(data)
             except Exception as ex:
@@ -147,7 +144,7 @@ class NgrokHandler:
                 request_data = self.binary_data[8: 8 + request_size]
 
                 logger.debug("receive control request: %s", request_data)
-                # TODO: 在这里要做处理请求
+
                 await self.process_request(request_data)
 
                 # 移除已处理请求的数据
@@ -160,7 +157,6 @@ class NgrokHandler:
                 request_data = self.binary_data[8:]
                 logger.debug("receive control request: %s", request_data)
 
-                # TODO: 在这里要做处理请求
                 await self.process_request(request_data)
 
                 self.binary_data = None
@@ -238,7 +234,9 @@ class NgrokHandler:
             self.resp_list.append(resp)
 
             if req_type == 'RegProxy':
-                self.http_start_proxy()
+                # self.http_start_proxy()
+                http_req = await self.get_http_req_from_queue()
+                self.resp_list.append(http_req)
 
             self.loop.remove_reader(self.fd)
             self.loop.add_writer(self.fd, self.write_handler)
@@ -342,33 +340,30 @@ class NgrokHandler:
         if err == ERR_SUCCESS:
             self.is_proxy = True
             self.client_id = client_id
-            func_dict = GLOBAL_CACHE.HTTP_REQUEST_LIST[client_id].pop()
-
-            self.insert_http_resp_list = func_dict['insert_http_resp_list']
-
-            set_insert_proxy_resp_list = func_dict['set_insert_proxy_resp_list']
-
-            def insert_proxy_resp_list(resp_data):
-                self.resp_list.append(resp_data)
-
-            set_insert_proxy_resp_list(insert_proxy_resp_list)
-
-            # get_url_and_addr = func_dict['get_url_and_addr']
-
-            # self.url, self.browser_addr = get_url_and_addr()
 
             url_and_addr = await GLOBAL_CACHE.PROXY_URL_ADDR_LIST[self.client_id].get()
             if url_and_addr == 'close':
                 asyncio.ensure_future(self.process_error(), loop=self.loop)
                 return
 
-            # TODO: 使用 communicate_identify 在消息队列(Queue, redis..)中进行交换数据
+            # 获取 communicate_identify
+            # 使用 communicate_identify 在消息队列(Queue, redis..)中进行交换数据
             self.url, self.browser_addr, self.communicate_identify = (url_and_addr['url'], url_and_addr['addr'],
                                                                       url_and_addr['communicate_identify'])
 
             resp = generate_start_proxy(self.url, self.browser_addr)
 
-            self.http_start_proxy = func_dict['http_start_proxy']
+            queue_map = GLOBAL_CACHE.HTTP_COMMU_QUEUE_MAP.get(self.communicate_identify)
+            if queue_map:
+                self.control_http_queue = queue_map.get('control_http_queue')
+                self.control_proxy_queue = queue_map.get('control_proxy_queue')
+
+                # 添加处理proxy对应的http连接意外断开的处理事件
+                asyncio.ensure_future(self.close_by_http(), loop=self.loop)
+            else:
+                asyncio.ensure_future(self.process_error(), loop=self.loop)
+
+            # self.http_start_proxy = func_dict['http_start_proxy']
             # http_start_proxy()
 
         return err, msg, resp
@@ -393,32 +388,38 @@ class NgrokHandler:
         处理错误，关闭客户端连接，移除所有事件监听。比如：解析命令出错等
         :return:
         """
-        self.loop.remove_reader(self.fd)
-        self.loop.remove_writer(self.fd)
-
-        GLOBAL_CACHE.pop_client_id(self.client_id)
-        # TODO: Fixed me, may be should close all the proxy socket here
-
-        tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)
-
-        asyncio.ensure_future(GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id].put('close'), loop=self.loop)
-
-        for url in tunnels['http']:
-            GLOBAL_CACHE.pop_host(url)
-
-        for url in tunnels['https']:
-            GLOBAL_CACHE.pop_host(url)
-
-        send_req_proxy_queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
-
-        await send_req_proxy_queue.put('close')
-
-        queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
-
-        if queue is not None:
-            queue.put('close')
-
         try:
+            self.loop.remove_reader(self.fd)
+            self.loop.remove_writer(self.fd)
+
+            # GLOBAL_CACHE.pop_client_id(self.client_id)
+
+            if not self.is_proxy:
+                tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)
+
+                asyncio.ensure_future(GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id].put('close'), loop=self.loop)
+
+                for url in tunnels['http']:
+                    GLOBAL_CACHE.pop_host(url)
+
+                for url in tunnels['https']:
+                    GLOBAL_CACHE.pop_host(url)
+
+                send_req_proxy_queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
+
+                await send_req_proxy_queue.put('close')
+
+                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
+
+                if queue is not None:
+                    queue.put('close')
+            else:
+                # 检查queue是否存在并尝试通知http连接关闭
+                if self.control_http_queue:
+                    await self.control_http_queue.put('close')
+
+                GLOBAL_CACHE.del_http_commu_queue_map(self.communicate_identify)
+
             self.conn.close()
         except Exception as ex:
             logger.exception("Exception in process error:", exc_info=ex)
@@ -454,4 +455,37 @@ class NgrokHandler:
 
         self.loop.add_writer(self.fd, self.write_handler)
 
+    async def insert_data_to_http_resp_queue(self, resp_data):
+        """
+        将客户端返回的 http response 插入到对应的消息队列（Queue, redis...）中，等待http_handler返回给浏览器
+        :param resp_data:
+        :return:
+        """
+        queue_map = GLOBAL_CACHE.HTTP_COMMU_QUEUE_MAP[self.communicate_identify]
+        if queue_map:
+            http_resp_queue = queue_map.get('http_resp_queue')
+            if http_resp_queue:
+                await http_resp_queue.put(resp_data)
 
+    async def get_http_req_from_queue(self):
+        """
+        从消息队列中(Queue, redis...)获取http request
+        :return:
+        """
+        queue_map = GLOBAL_CACHE.HTTP_COMMU_QUEUE_MAP[self.communicate_identify]
+        if queue_map:
+            http_req_queue = queue_map.get('http_req_queue')
+            if http_req_queue:
+                return await http_req_queue.get()
+
+    async def close_by_http(self):
+        """
+        通过 control_ngrok_queue 获取 close 的消息，接收到之后关闭连接。
+        当连接是proxy的时候，如果对应的http断开，则将该proxy连接也断开
+        :return:
+        """
+
+        if self.control_proxy_queue:
+            signal = await self.control_proxy_queue.get()
+            if signal == 'close':
+                asyncio.ensure_future(self.process_error(), loop=self.loop)
