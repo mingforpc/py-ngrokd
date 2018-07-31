@@ -332,7 +332,7 @@ class NgrokHandler:
         client_id = request['Payload'].get('ClientId')
 
         # 请求中client_id为None，可能是不规范或者恶意的客户端，关闭连接
-        if client_id is None:
+        if client_id is None or client_id == "":
             return err, msg, None
 
         err, msg, resp = NgrokController.reg_proxy(client_id)
@@ -394,22 +394,25 @@ class NgrokHandler:
             if not self.is_proxy:
                 tunnels = GLOBAL_CACHE.pop_tunnel(self.client_id)
 
-                asyncio.ensure_future(GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id].put('close'), loop=self.loop)
+                if self.client_id in GLOBAL_CACHE.SEND_REQ_PROXY_LIST:
+                    asyncio.ensure_future(GLOBAL_CACHE.SEND_REQ_PROXY_LIST[self.client_id].put('close'), loop=self.loop)
 
-                for url in tunnels['http']:
-                    GLOBAL_CACHE.pop_host(url)
+                if tunnels is not None:
+                    for url in tunnels['http']:
+                        GLOBAL_CACHE.pop_host(url)
 
-                for url in tunnels['https']:
-                    GLOBAL_CACHE.pop_host(url)
+                    for url in tunnels['https']:
+                        GLOBAL_CACHE.pop_host(url)
 
-                send_req_proxy_queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
+                if self.client_id in GLOBAL_CACHE.SEND_REQ_PROXY_LIST:
+                    send_req_proxy_queue = GLOBAL_CACHE.SEND_REQ_PROXY_LIST.pop(self.client_id)
+                    await send_req_proxy_queue.put('close')
 
-                await send_req_proxy_queue.put('close')
+                if self.client_id in GLOBAL_CACHE.PROXY_URL_ADDR_LIST:
+                    queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
 
-                queue = GLOBAL_CACHE.PROXY_URL_ADDR_LIST.pop(self.client_id)
-
-                if queue is not None:
-                    queue.put('close')
+                    if queue is not None:
+                        queue.put('close')
             else:
                 # 检查queue是否存在并尝试通知http连接关闭
                 if self.control_http_queue:

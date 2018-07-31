@@ -115,7 +115,8 @@ class GlobalCache(object):
         :param client_id:
         :return: {'http': [url, url, ...], 'https': [url, url, ...], 'tcp':[port, port, ...]}
         """
-        return self.TUNNEL_LIST.pop(client_id)
-
+        if client_id in self.TUNNEL_LIST:
+            return self.TUNNEL_LIST.pop(client_id)
+        return None
 
 GLOBAL_CACHE = GlobalCache()

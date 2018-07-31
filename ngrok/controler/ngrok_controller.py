@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 import time
-from ngrok.config import DEFAULT_SERVER_DOMAIN, DEFAULT_SERVER_HTTP
+from ngrok.config import DEFAULT_SERVER_DOMAIN, DEFAULT_SERVER_HTTP, DEFAULT_SERVER_HTTPS
 from ngrok.util import md5, get_rand_char
 from ngrok.logger import logger
 from ngrok.err import get_err_msg
@@ -62,7 +62,7 @@ class NgrokController:
             if protocol == 'http' and DEFAULT_SERVER_HTTP != 80:
                 url = 'http://' + domain_name + ':' + str(DEFAULT_SERVER_HTTP)
             elif protocol == 'https' and DEFAULT_SERVER_HTTP != 443:
-                url = 'https://' + domain_name + ':' + str(DEFAULT_SERVER_HTTP)
+                url = 'https://' + domain_name + ':' + str(DEFAULT_SERVER_HTTPS)
             else:
                 url = protocol + '://' + domain_name
 
